@@ -1,0 +1,52 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+.env/
+*.env
+
+# Django specific
+*.log
+local_settings.py
+db.sqlite3
+instance/
+media/
+staticfiles/
+
+# Migrations
+*/migrations/__pycache__/
+*/migrations/*.pyc
+*/migrations/*.pyo
+*/migrations/*.pyd
+
+# PyCharm
+.idea/
+
+# VS Code
+.vscode/
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# Pipenv
+Pipfile.lock
+
+# Docker
+*.pid
+
+# PostgreSQL
+*.dump
+
+# Celery
+celerybeat-schedule
+
+# Other
+*.swp
+*.swo
+
