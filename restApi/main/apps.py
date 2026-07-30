@@ -9,7 +9,7 @@ def create_default_superuser(sender, **kwargs):
         User.objects.create_superuser(
             nome='admin',
             email='admin@provedor.com',
-            password='admin'
+            password='admin@123456'
         
         )
         print("Superuser padrão criado")

@@ -48,7 +48,7 @@ class Command(BaseCommand):
         for _ in range(4):
             advogado = Advogado.objects.create_user(
                 email=fake.email(),
-                password="123456",
+                password="newUser12345",
                 nome=fake.name(),
                 telefone=fake.phone_number(),
                 oab=str(fake.random_int(10000, 99999)),
