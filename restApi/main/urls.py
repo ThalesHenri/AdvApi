@@ -56,4 +56,5 @@ urlpatterns = [
 
     path('search-select/', views.searchSelect, name='search-select'), # deve estar no dominio data field,
     path('csrf/', auth_views.CsrfTokenView.as_view(), name='csrf_token'),
+    path('health/', health_views.HealthCheckView.as_view(), name='health_check'),
 ]

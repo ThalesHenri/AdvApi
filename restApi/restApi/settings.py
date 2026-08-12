@@ -23,7 +23,7 @@ if os.getenv('DOCKER') == '1':
 
 else:
     # Ambiente local (Django rodando localmente)
-    ALLOWED_HOSTS = ['localhost', '127.0.0.1']
+    ALLOWED_HOSTS = ['localhost', '127.0.0.1','testserver']
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -99,6 +99,7 @@ SECURE_REFERRER_POLICY = 'same-origin'
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 API_SECRET_KEY = os.getenv('API_SECRET_KEY', '')
+HEALTH_API_KEY = "TUeN6cKukUYBAMjT936Lz8mm7jAqCWpmQP17yg"
 API_HEADER_NAME = "AdvKey"
 ROOT_URLCONF = 'restApi.urls'
 AUTH_USER_MODEL = 'main.Advogado'

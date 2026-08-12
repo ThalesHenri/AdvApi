@@ -7,3 +7,4 @@ from .tarefas_services import *
 from .escritorio_services import *
 from .documento_services import *
 from .data_field_services import *
+from .health_services import *

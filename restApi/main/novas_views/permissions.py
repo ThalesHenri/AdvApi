@@ -1,4 +1,5 @@
 from rest_framework import permissions
+from django.conf import settings
 
 class IsSystemStaff(permissions.BasePermission):
     """
@@ -30,3 +31,13 @@ class OnlyAdminDELETE(permissions.BasePermission):
         if request.method == 'DELETE':
             return request.user and request.user.is_authenticated and request.user.is_superuser
         return request.user and request.user.is_authenticated
+    
+    
+class HealthCheckApi(permissions.BasePermission):
+    def has_permission(self, request, view):
+        token = request.headers.get('Health-Api-Key')
+        
+        if token and token == getattr(settings, 'HEALTH_API_KEY', None):
+            return True
+        return False
+        

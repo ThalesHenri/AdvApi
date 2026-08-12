@@ -9,3 +9,4 @@ from .pagination_views import *
 from .tarefas_views import *
 from .parceiros_views import *
 from .documento_view import *
+from .health_views import *
