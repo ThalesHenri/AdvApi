@@ -175,7 +175,17 @@ class Processo(models.Model):
     numeroProcesso = models.CharField(max_length=50, unique=True, blank=True, default='Número não cadastrado.')
     STATUS_CHOICES = [('ativo','Ativo'),('arquivado','Arquivado')]
     status = models.CharField(max_length=50,choices=STATUS_CHOICES, default='ativo')
-    clienteId = models.ForeignKey(Cliente, on_delete=models.CASCADE)
+    clienteId = models.ForeignKey(
+        Cliente,
+        on_delete=models.CASCADE,
+        related_name='processos_principais',
+    )
+    clientesId = models.ManyToManyField(
+        Cliente,
+        through='ProcessoCliente',
+        related_name='processos_associados',
+        blank=True,
+    )
     advogadoCriadorId = models.ForeignKey(Advogado, on_delete=models.CASCADE)
     grupoAcao=  models.ForeignKey('GrupoAcao', on_delete=models.PROTECT)
     tipoAcao = models.ForeignKey('TipoAcao', on_delete=models.PROTECT, blank=True)
@@ -187,7 +197,24 @@ class Processo(models.Model):
     observacoes = models.TextField(blank=True)
     prioritario = models.BooleanField(default=False)
     concluido = models.BooleanField(default=False)
-    
+
+
+class ProcessoCliente(models.Model):
+    processo = models.ForeignKey(
+        Processo, on_delete=models.CASCADE, related_name='clientes_associacoes'
+    )
+    cliente = models.ForeignKey(Cliente, on_delete=models.CASCADE, related_name='+')
+    ordem = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ('ordem', 'id')
+        constraints = [
+            models.UniqueConstraint(
+                fields=('processo', 'cliente'),
+                name='unique_cliente_por_processo',
+            ),
+        ]
+
 
 class GrupoAcao(models.Model):
     nome = models.CharField(max_length=100)

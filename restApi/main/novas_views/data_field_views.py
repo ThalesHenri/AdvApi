@@ -645,7 +645,9 @@ class ProcessosClientesNomeView(APIView):
             )
             processos_encontrados.append(processos_numero)
         if clientes.exists():
-            processos_clientes = Processo.objects.filter(clienteId__in=clientes)
+            processos_clientes = Processo.objects.filter(
+                Q(clienteId__in=clientes) | Q(clientesId__in=clientes)
+            ).distinct()
             processos_encontrados.append(processos_clientes)
         processos = Processo.objects.none()
         for qs in processos_encontrados:
@@ -674,7 +676,14 @@ class ProcessosClientesNomeView(APIView):
                     {"id": cliente.id, "nome": cliente.nome, "cpf": cliente.cpf}
                 )
         if processos.exists():
-            for processo in processos.select_related("clienteId")[:10]:
+            for processo in processos.select_related('clienteId').prefetch_related(
+                "clientes_associacoes__cliente"
+            )[:10]:
+                clientes_adicionais = [
+                    associacao.cliente
+                    for associacao in processo.clientes_associacoes.all()
+                ]
+                clientes_processo = [processo.clienteId, *clientes_adicionais]
                 cliente = processo.clienteId
                 response_data["processos"].append(
                     {
@@ -682,9 +691,14 @@ class ProcessosClientesNomeView(APIView):
                         "numero": processo.numeroProcesso,
                         "titulo": processo.titulo,
                         "status": processo.status,
+                        "clientes": [
+                            {"id": item.id, "nome": item.nome, "cpf": item.cpf}
+                            for item in clientes_processo
+                        ],
                         "nomeCliente": cliente.nome if cliente else None,
                         "cpfCliente": cliente.cpf if cliente else None,
                         "clienteId": cliente.id if cliente else None,
+                        "clientesId": [item.id for item in clientes_adicionais],
                     }
                 )
         return JsonResponse(response_data)
