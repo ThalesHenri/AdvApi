@@ -651,7 +651,7 @@ class ProcessosClientesNomeView(APIView):
             processos_encontrados.append(processos_clientes)
         processos = Processo.objects.none()
         for qs in processos_encontrados:
-            processos = processos | qs
+            processos = processos | qs.distinct()
         processos = processos.distinct()
         if not clientes.exists() and (not processos.exists()):
             return JsonResponse(
@@ -689,7 +689,6 @@ class ProcessosClientesNomeView(APIView):
                     {
                         "id": processo.id,
                         "numero": processo.numeroProcesso,
-                        "titulo": processo.titulo,
                         "status": processo.status,
                         "clientes": [
                             {"id": item.id, "nome": item.nome, "cpf": item.cpf}

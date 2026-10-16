@@ -24,7 +24,7 @@ from rest_framework.pagination import PageNumberPagination
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from django.core.exceptions import FieldError
 from rest_framework.exceptions import ValidationError
-from django.db.models.functions import ExtractDay, Now
+from django.db.models.functions import ExtractDay, Now, Replace
 from django.db.models import ExpressionWrapper, F, IntegerField
 # Remova DurationField se não estiver usando
 from django.db.models import DateField
@@ -3123,10 +3123,26 @@ def generic_select_view(request):
                 queryset = queryset.filter(is_active=True)
         
         # Busca
-        search = request.GET.get('search', '')
+        search = request.GET.get('search', '').strip()
         if search:
-            # Tenta buscar por nome ou outros campos
-            if hasattr(model_class, 'nome'):
+            if model_key == 'cliente':
+                cpf_digits = re.sub(r'\D', '', search)
+                client_search = Q(nome__icontains=search) | Q(cpf__icontains=search)
+                if cpf_digits:
+                    queryset = queryset.annotate(
+                        cpf_sem_formatacao=Replace(
+                            Replace(
+                                Replace(F('cpf'), Value('.'), Value('')),
+                                Value('-'),
+                                Value(''),
+                            ),
+                            Value(' '),
+                            Value(''),
+                        )
+                    )
+                    client_search |= Q(cpf_sem_formatacao__icontains=cpf_digits)
+                queryset = queryset.filter(client_search)
+            elif hasattr(model_class, 'nome'):
                 queryset = queryset.filter(nome__icontains=search)
             elif hasattr(model_class, 'name'):
                 queryset = queryset.filter(name__icontains=search)
