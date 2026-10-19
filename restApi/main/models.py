@@ -3,7 +3,7 @@ from django.contrib.auth.models import AbstractBaseUser,BaseUserManager,Permissi
 
 class Cliente(models.Model):
     nome = models.CharField(max_length=255)
-    cpf = models.CharField(max_length=14, unique=True)
+    cpf = models.CharField(max_length=20, unique=True)
     telefone = models.CharField(max_length=20)
     dataNascimento = models.DateField(blank=True, null=True)
     profissao = models.CharField(max_length=255,blank=True)
