@@ -2718,9 +2718,9 @@ def advogadosDashboard(request,advogado_id):
     
     
 
-@permission_classes([IsAuthenticated])
 @api_view(['GET'])
-def advUserInfo(request):
+@permission_classes([IsAuthenticated])
+def minha_view(request):
     token = request.headers.get('Authorization')
 
     if not token:

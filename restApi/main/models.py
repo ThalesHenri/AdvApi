@@ -42,7 +42,7 @@ class Representante(models.Model):
     telefone = models.CharField(max_length=20,unique=True)
     email = models.EmailField(default='nenhum@provedor.com',unique=True, blank=True)
     profissao = models.CharField(max_length=255,blank=True)
-    cpf = models.CharField(max_length=14,unique=True)
+    cpf = models.CharField(max_length=20,unique=True)
     cep = models.CharField(max_length=10)
     cliente = models.ForeignKey(Cliente, on_delete=models.CASCADE, null=True, blank=True, related_name='representantes')
     rua = models.CharField(max_length=255)
@@ -61,7 +61,7 @@ class ClienteEspera(models.Model):
     telefone = models.CharField(max_length=20, default="Sem telefone.", unique=True)
     observacoes = models.TextField(blank=True)
     IdAdvogado = models.IntegerField(default=0)
-    cpf = models.CharField(max_length=14, blank=True,unique=True)
+    cpf = models.CharField(max_length=20, blank=True,unique=True)
     dataNascimento = models.DateField(blank=True,default='2000-01-01')
 
     def __str__(self):
@@ -72,7 +72,7 @@ class Parceiros(models.Model):
     nome = models.CharField(max_length=255)
     email = models.EmailField(default='nenhum@provedor.com', unique=True)
     telefone = models.CharField(max_length=20, default="Sem telefone.", unique=True)
-    cpf = models.CharField(max_length=18, default="Sem CNPJ.",unique=True)
+    cpf = models.CharField(max_length=20, default="Sem CNPJ.",unique=True)
     rua = models.CharField(max_length=255,blank=True)
     numero = models.IntegerField(default=0)
     cidade = models.CharField(max_length=255,blank=True)
