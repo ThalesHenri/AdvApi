@@ -3,7 +3,7 @@ from django.contrib.auth.models import AbstractBaseUser,BaseUserManager,Permissi
 
 class Cliente(models.Model):
     nome = models.CharField(max_length=255)
-    cpf = models.CharField(max_length=14, unique=True)
+    cpf = models.CharField(max_length=20, unique=True)
     telefone = models.CharField(max_length=20)
     dataNascimento = models.DateField(blank=True, null=True)
     profissao = models.CharField(max_length=255,blank=True)
@@ -42,7 +42,7 @@ class Representante(models.Model):
     telefone = models.CharField(max_length=20,unique=True)
     email = models.EmailField(default='nenhum@provedor.com',unique=True, blank=True)
     profissao = models.CharField(max_length=255,blank=True)
-    cpf = models.CharField(max_length=14,unique=True)
+    cpf = models.CharField(max_length=20,unique=True)
     cep = models.CharField(max_length=10)
     cliente = models.ForeignKey(Cliente, on_delete=models.CASCADE, null=True, blank=True, related_name='representantes')
     rua = models.CharField(max_length=255)
@@ -61,7 +61,7 @@ class ClienteEspera(models.Model):
     telefone = models.CharField(max_length=20, default="Sem telefone.", unique=True)
     observacoes = models.TextField(blank=True)
     IdAdvogado = models.IntegerField(default=0)
-    cpf = models.CharField(max_length=14, blank=True,unique=True)
+    cpf = models.CharField(max_length=20, blank=True,unique=True)
     dataNascimento = models.DateField(blank=True,default='2000-01-01')
 
     def __str__(self):
@@ -72,7 +72,7 @@ class Parceiros(models.Model):
     nome = models.CharField(max_length=255)
     email = models.EmailField(default='nenhum@provedor.com', unique=True)
     telefone = models.CharField(max_length=20, default="Sem telefone.", unique=True)
-    cpf = models.CharField(max_length=18, default="Sem CNPJ.",unique=True)
+    cpf = models.CharField(max_length=20, default="Sem CNPJ.",unique=True)
     rua = models.CharField(max_length=255,blank=True)
     numero = models.IntegerField(default=0)
     cidade = models.CharField(max_length=255,blank=True)
@@ -175,7 +175,17 @@ class Processo(models.Model):
     numeroProcesso = models.CharField(max_length=50, unique=True, blank=True, default='Número não cadastrado.')
     STATUS_CHOICES = [('ativo','Ativo'),('arquivado','Arquivado')]
     status = models.CharField(max_length=50,choices=STATUS_CHOICES, default='ativo')
-    clienteId = models.ForeignKey(Cliente, on_delete=models.CASCADE)
+    clienteId = models.ForeignKey(
+        Cliente,
+        on_delete=models.CASCADE,
+        related_name='processos_principais',
+    )
+    clientesId = models.ManyToManyField(
+        Cliente,
+        through='ProcessoCliente',
+        related_name='processos_associados',
+        blank=True,
+    )
     advogadoCriadorId = models.ForeignKey(Advogado, on_delete=models.CASCADE)
     grupoAcao=  models.ForeignKey('GrupoAcao', on_delete=models.PROTECT)
     tipoAcao = models.ForeignKey('TipoAcao', on_delete=models.PROTECT, blank=True)
@@ -187,7 +197,24 @@ class Processo(models.Model):
     observacoes = models.TextField(blank=True)
     prioritario = models.BooleanField(default=False)
     concluido = models.BooleanField(default=False)
-    
+
+
+class ProcessoCliente(models.Model):
+    processo = models.ForeignKey(
+        Processo, on_delete=models.CASCADE, related_name='clientes_associacoes'
+    )
+    cliente = models.ForeignKey(Cliente, on_delete=models.CASCADE, related_name='+')
+    ordem = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ('ordem', 'id')
+        constraints = [
+            models.UniqueConstraint(
+                fields=('processo', 'cliente'),
+                name='unique_cliente_por_processo',
+            ),
+        ]
+
 
 class GrupoAcao(models.Model):
     nome = models.CharField(max_length=100)
