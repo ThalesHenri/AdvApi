@@ -1,0 +1,1239 @@
+diff --git a/restApi/.env.example b/restApi/.env.example
+index 2c81b85..14a1add 100644
+--- a/restApi/.env.example
++++ b/restApi/.env.example
+@@ -3,6 +3,11 @@ DJANGO_DEBUG=true
+ DJANGO_SECRET_KEY=replace-with-a-long-random-development-secret
+ JWT_SIGNING_KEY=replace-with-a-different-long-random-development-secret
+ API_SECRET_KEY=
++DATABASE_URL=
++DJANGO_SUPERUSER_EMAIL=
++DJANGO_SUPERUSER_PASSWORD=
++DJANGO_SUPERUSER_NOME=
++DJANGO_SUPERUSER_TELEFONE=
+ DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,restapi_django,host.docker.internal
+ CORS_ALLOWED_ORIGINS=http://localhost:3000
+ FRONTEND_URL=http://localhost:3000
+@@ -17,8 +22,16 @@ POSTGRES_PASSWORD=replace-with-a-local-password
+ # DJANGO_SECRET_KEY=<secret stored by your cloud provider>
+ # JWT_SIGNING_KEY=<different secret stored by your cloud provider>
+ # API_SECRET_KEY=<secret stored by your cloud provider>
++# DATABASE_URL=<Render Internal Database URL>
++# DJANGO_SUPERUSER_EMAIL=admin@example.com
++# DJANGO_SUPERUSER_PASSWORD=<a-long-unique-password-with-at-least-12-characters>
++# DJANGO_SUPERUSER_NOME=Administrador
++# DJANGO_SUPERUSER_TELEFONE=00000000000
+ # DJANGO_ALLOWED_HOSTS=api.example.com
+ # CORS_ALLOWED_ORIGINS=https://app.example.com
+ # FRONTEND_URL=https://app.example.com
+ # JWT_COOKIE_SECURE=true
+-# JWT_COOKIE_SAMESITE=Lax
++# JWT_COOKIE_SAMESITE=None
++# CSRF_COOKIE_SECURE=true
++# CSRF_COOKIE_SAMESITE=None
++# CSRF_TRUSTED_ORIGINS=https://app.example.com
+diff --git a/restApi/.gitignore b/restApi/.gitignore
+index 70ba85b..97b3149 100644
+--- a/restApi/.gitignore
++++ b/restApi/.gitignore
+@@ -1,3 +1,7 @@
+ .env
+ __pycache__/
+ *.py[cod]
++
++# As migrations definem o schema do banco e precisam ser versionadas.
++!main/migrations/
++!main/migrations/*.py
+diff --git a/restApi/.python-version b/restApi/.python-version
+new file mode 100644
+index 0000000..e4fba21
+--- /dev/null
++++ b/restApi/.python-version
+@@ -0,0 +1 @@
++3.12
+diff --git a/restApi/docker-compose.yml b/restApi/docker-compose.yml
+index 86b3d53..022cd39 100644
+--- a/restApi/docker-compose.yml
++++ b/restApi/docker-compose.yml
+@@ -16,17 +16,29 @@ services:
+       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
+       - JWT_COOKIE_SECURE=${JWT_COOKIE_SECURE:-false}
+       - JWT_COOKIE_SAMESITE=${JWT_COOKIE_SAMESITE:-Lax}
++
++      # Superusuário
++      - DJANGO_SUPERUSER_EMAIL=${DJANGO_SUPERUSER_EMAIL:-}
++      - DJANGO_SUPERUSER_NOME=${DJANGO_SUPERUSER_NOME:-}
++      - DJANGO_SUPERUSER_PASSWORD=${DJANGO_SUPERUSER_PASSWORD:-}
++      - DJANGO_SUPERUSER_TELEFONE=${DJANGO_SUPERUSER_TELEFONE:-}
++
+       - POSTGRES_DB=${POSTGRES_DB:-restapi}
+       - POSTGRES_USER=${POSTGRES_USER:-postgres}
+       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
++
+     ports:
+       - "8000:8000"
++
+     volumes:
+       - ./:/app
++
+     depends_on:
+       db:
+         condition: service_healthy
++
+     command: sh -c "python manage.py migrate && gunicorn restApi.wsgi:application --bind 0.0.0.0:8000 --workers 3 --access-logfile - --error-logfile -"
++
+     networks:
+       - dev-network
+ 
+@@ -54,4 +66,4 @@ volumes:
+   postgres_data:
+ 
+ networks:
+-  dev-network:
++  dev-network:
+\ No newline at end of file
+diff --git a/restApi/docs/AUTH_FRONTEND.md b/restApi/docs/AUTH_FRONTEND.md
+new file mode 100644
+index 0000000..e1bc9bc
+--- /dev/null
++++ b/restApi/docs/AUTH_FRONTEND.md
+@@ -0,0 +1,181 @@
++# Integração do front-end: login, JWT e CSRF
++
++## Visão geral
++
++A API autentica o usuário por cookies, não por token no `localStorage`,
++`sessionStorage` ou no cabeçalho `Authorization`.
++
++Após o login, a API grava dois cookies `HttpOnly`:
++
++- `access_token`: JWT de acesso, com validade de **15 minutos**;
++- `refresh_token`: JWT de renovação, com validade de **8 horas** (padrão) ou **7 dias** (se "mantenha-me logado" estiver ativo). A cada
++  renovação o refresh token é rotacionado.
++
++Como os cookies são `HttpOnly`, o JavaScript não consegue (e não deve) ler os
++JWTs. O navegador os envia automaticamente quando a chamada usa credenciais.
++O cookie `csrftoken`, por outro lado, pode ser lido pelo JavaScript e deve ser
++enviado no cabeçalho `X-CSRFToken` em requisições que alteram dados.
++
++> Todos os caminhos abaixo incluem o prefixo `/api/`. Exemplo local:
++> `http://localhost:8000/api`.
++
++## Configuração necessária
++
++Use sempre `credentials: 'include'` no `fetch` (ou `withCredentials: true` no
++Axios). Sem isso, o navegador não aceitará/enviará os cookies da API em uma
++chamada cross-origin.
++
++Em desenvolvimento, não misture hosts: se o front estiver em
++`http://localhost:3000`, acesse a API por `http://localhost:8000`, e não por
++`127.0.0.1`. Os hosts do front também precisam estar configurados no back-end
++em `CORS_ALLOWED_ORIGINS` e `CSRF_TRUSTED_ORIGINS`.
++
++## Fluxo de inicialização e login
++
++1. Ao abrir a aplicação (antes de qualquer `POST`, `PUT`, `PATCH` ou `DELETE`),
++   faça `GET /api/csrf/`. A resposta configura/renova o cookie `csrftoken`.
++2. Faça o login em `POST /api/token/` com as credenciais e envie o cabeçalho
++   `X-CSRFToken`, usando o valor obtido no passo anterior. Inclua o campo `remember_me`
++   para definir a duração do refresh token (8 horas se false, 7 dias se true).
++3. Em caso de sucesso (`200`), os cookies `access_token` e `refresh_token` são
++   recebidos por `Set-Cookie`. A resposta não contém os JWTs no JSON.
++4. Busque o estado inicial do usuário em `GET /api/advogado/current-user/`.
++   Se retornar `200`, considere a sessão autenticada.
++
++Exemplo com `fetch`:
++
++```ts
++const API_URL = process.env.NEXT_PUBLIC_API_URL!; // ex.: http://localhost:8000/api
++
++export async function initializeCsrf() {
++  await fetch(`${API_URL}/csrf/`, { credentials: 'include' });
++}
++
++export async function login(email: string, password: string, rememberMe: boolean = false) {
++  await initializeCsrf();
++  const csrf = getCookie('csrftoken');
++
++  const response = await fetch(`${API_URL}/token/`, {
++    method: 'POST',
++    credentials: 'include',
++    headers: {
++      'Content-Type': 'application/json',
++      ...(csrf ? { 'X-CSRFToken': csrf } : {}),
++    },
++    body: JSON.stringify({ email, password, remember_me: rememberMe }),
++  });
++
++  if (!response.ok) throw new Error('Usuário ou senha inválidos.');
++  return fetch(`${API_URL}/advogado/current-user/`, {
++    credentials: 'include',
++  }).then((r) => r.json());
++}
++```
++
++O campo de identificação do login é `email`, pois o modelo usa o e-mail como
++`USERNAME_FIELD`. Portanto, envie `{ email, password }`.
++
++## Como enviar CSRF nas requisições autenticadas
++
++Para `GET`, `HEAD` e `OPTIONS`, envie apenas as credenciais. Para qualquer
++requisição de escrita (`POST`, `PUT`, `PATCH` ou `DELETE`) autenticada:
++
++1. leia o cookie `csrftoken`;
++2. envie seu valor em `X-CSRFToken`;
++3. mantenha `credentials: 'include'` para enviar os cookies JWT e CSRF.
++
++Não envie `Authorization: Bearer ...`: a API ignora esse fluxo e lê
++`access_token` do cookie.
++
++```ts
++function getCookie(name: string) {
++  const item = document.cookie
++    .split('; ')
++    .find((cookie) => cookie.startsWith(`${name}=`));
++  return item ? decodeURIComponent(item.split('=').slice(1).join('=')) : null;
++}
++
++export async function apiFetch(path: string, init: RequestInit = {}) {
++  const method = (init.method ?? 'GET').toUpperCase();
++  const headers = new Headers(init.headers);
++
++  if (!['GET', 'HEAD', 'OPTIONS', 'TRACE'].includes(method)) {
++    let csrf = getCookie('csrftoken');
++    if (!csrf) {
++      await initializeCsrf();
++      csrf = getCookie('csrftoken');
++    }
++    if (csrf) headers.set('X-CSRFToken', csrf);
++  }
++
++  return fetch(`${API_URL}${path}`, {
++    ...init,
++    method,
++    headers,
++    credentials: 'include',
++  });
++}
++
++// Exemplo: criação de cliente
++await apiFetch('/clientes/', {
++  method: 'POST',
++  headers: { 'Content-Type': 'application/json' },
++  body: JSON.stringify(dadosDoCliente),
++});
++```
++
++## Renovação da sessão
++
++Quando uma chamada autenticada retornar `401`, tente uma única renovação:
++
++`POST /api/token/refresh/` com `credentials: 'include'` e `X-CSRFToken`. Não
++envie o refresh token no corpo: ele é lido pelo back-end do cookie
++`refresh_token`. Em caso de sucesso, a API troca os cookies e a chamada
++original pode ser repetida uma vez.
++Se a renovação também retornar `401`, descarte o estado local do usuário e
++direcione para o login.
++
++```ts
++async function refreshSession() {
++  const csrf = getCookie('csrftoken');
++  const response = await fetch(`${API_URL}/token/refresh/`, {
++    method: 'POST',
++    credentials: 'include',
++    headers: csrf ? { 'X-CSRFToken': csrf } : {},
++  });
++  return response.ok;
++}
++```
++
++Evite criar vários refreshes simultâneos: centralize a renovação em um único
++interceptor/fila. Assim, quando várias chamadas receberem `401`, todas aguardam
++a mesma renovação e só uma delas chama o endpoint.
++
++## Logout
++
++Para encerrar a sessão, chame `POST /api/advogado/logout/` com
++`credentials: 'include'` e `X-CSRFToken`. A API invalida o refresh token quando possível,
++marca o usuário offline e remove os dois cookies. Depois disso, limpe somente
++o estado de interface/cache do front-end; não há JWT local para apagar.
++
++```ts
++await apiFetch('/advogado/logout/', { method: 'POST' });
++// limpar store/cache e redirecionar para /login
++```
++
++## Diagnóstico rápido
++
++| Sintoma | Verificar |
++| --- | --- |
++| Cookies não aparecem ou não seguem para a API | `credentials: 'include'`, origem CORS permitida e uso consistente de `localhost`/`127.0.0.1`. |
++| `403 CSRF Failed` | Primeiro execute `GET /api/csrf/` e envie o cookie `csrftoken` como `X-CSRFToken` em operações de escrita. |
++| `401` após algum tempo | Faça uma renovação em `/api/token/refresh/` e repita a chamada uma vez. |
++| `401` na renovação | A sessão expirou ou foi revogada; solicite novo login. |
++
++## Produção
++
++Com front e API em sites diferentes, a API deve usar HTTPS e configurar
++`JWT_COOKIE_SECURE=true`, `CSRF_COOKIE_SECURE=true` e, quando for realmente
++cross-site, `JWT_COOKIE_SAMESITE=None` e `CSRF_COOKIE_SAMESITE=None`. Os
++domínios públicos exatos devem constar em `CORS_ALLOWED_ORIGINS` e
++`CSRF_TRUSTED_ORIGINS`; não use curingas com credenciais.
+diff --git a/restApi/main/apiTest.py b/restApi/main/apiTest.py
+deleted file mode 100644
+index e5df93c..0000000
+--- a/restApi/main/apiTest.py
++++ /dev/null
+@@ -1,28 +0,0 @@
+-import requests
+-
+-#farei os testes aqui
+-class ApiTest:
+-    def __init__(self,url):
+-        self.url = url
+-        
+-    def get(self):
+-        return requests.get(self.url)
+-    
+-    def clientePost(self,dados):
+-        return requests.post(self.url,data=dados)
+-
+-
+-    def clienteDelete(self,id):
+-        return requests.delete(self.url+str(id))
+-
+-test = ApiTest("http://127.0.0.1:8000/api/clientes/")
+-cliente = {
+-    "nome":"John Doe",
+-    "rg":"12312",
+-    "cpf":"1234576667",
+-    "sexo":"feminino"
+-}
+-reponse = test.clienteDelete('1/')
+-
+-
+-print(reponse.status_code)
+diff --git a/restApi/main/apps.py b/restApi/main/apps.py
+index 34a85a9..a4864e9 100644
+--- a/restApi/main/apps.py
++++ b/restApi/main/apps.py
+@@ -1,18 +1,36 @@
++import os
++
+ from django.apps import AppConfig
+-from django.db.models.signals import post_migrate
+ from django.contrib.auth import get_user_model
++from django.db import connections
++from django.db.models.signals import post_migrate
+ 
+ 
+-def create_default_superuser(sender, **kwargs):
+-    User = get_user_model()
+-    if not User.objects.filter(is_superuser=True).exists():
+-        User.objects.create_superuser(
+-            nome='admin',
+-            email='admin@provedor.com',
+-            password='admin'
+-        
+-        )
+-        print("Superuser padrão criado")
++def create_configured_superuser(sender, using, **kwargs):
++    """Cria o administrador configurado por ambiente uma única vez."""
++    email = os.getenv('DJANGO_SUPERUSER_EMAIL')
++    password = os.getenv('DJANGO_SUPERUSER_PASSWORD')
++    nome = os.getenv('DJANGO_SUPERUSER_NOME')
++    telefone = os.getenv('DJANGO_SUPERUSER_TELEFONE')
++
++    # Sem uma configuração completa, não cria usuário com dados ou senha padrão.
++    if not all((email, password, nome, telefone)):
++        return
++
++    user_model = get_user_model()
++    if user_model._meta.db_table not in connections[using].introspection.table_names():
++        return
++
++    if user_model.objects.filter(email__iexact=email).exists():
++        return
++
++    user_model.objects.create_superuser(
++        email=email,
++        password=password,
++        nome=nome,
++        telefone=telefone,
++    )
++    print('Superusuário inicial criado.')
+ 
+ 
+ class MainConfig(AppConfig):
+@@ -20,6 +38,8 @@ class MainConfig(AppConfig):
+     name = 'main'
+ 
+     def ready(self):
+-        post_migrate.connect(create_default_superuser, sender=self)
+-        return super().ready()
+-    
+\ No newline at end of file
++        post_migrate.connect(
++            create_configured_superuser,
++            sender=self,
++            dispatch_uid='main.create_configured_superuser',
++        )
+diff --git a/restApi/main/migrations/0001_initial.py b/restApi/main/migrations/0001_initial.py
+new file mode 100644
+index 0000000..fa48c91
+--- /dev/null
++++ b/restApi/main/migrations/0001_initial.py
+@@ -0,0 +1,246 @@
++# Generated by Django 5.1.7 on 2026-08-19 01:24
++
++import django.db.models.deletion
++from django.conf import settings
++from django.db import migrations, models
++
++
++class Migration(migrations.Migration):
++
++    initial = True
++
++    dependencies = [
++        ('auth', '0012_alter_user_first_name_max_length'),
++    ]
++
++    operations = [
++        migrations.CreateModel(
++            name='Cliente',
++            fields=[
++                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
++                ('nome', models.CharField(max_length=255)),
++                ('cpf', models.CharField(max_length=14, unique=True)),
++                ('telefone', models.CharField(max_length=20)),
++                ('dataNascimento', models.DateField(blank=True, null=True)),
++                ('profissao', models.CharField(blank=True, max_length=255)),
++                ('inss', models.CharField(blank=True, max_length=255)),
++                ('cep', models.CharField(blank=True, max_length=20)),
++                ('complemento', models.CharField(blank=True, max_length=255)),
++                ('contrato', models.BooleanField(default=True)),
++                ('contactadoPor', models.CharField(blank=True, max_length=255)),
++                ('motivo', models.TextField(blank=True)),
++                ('rua', models.CharField(blank=True, max_length=255)),
++                ('numero', models.IntegerField(null=True)),
++                ('cidade', models.CharField(blank=True, max_length=255)),
++                ('estado', models.CharField(blank=True, max_length=255)),
++                ('bairro', models.CharField(blank=True, max_length=255)),
++                ('observacoes', models.TextField(blank=True)),
++                ('foto', models.URLField(blank=True, max_length=500, null=True)),
++                ('contactado', models.BooleanField(default=False)),
++            ],
++        ),
++        migrations.CreateModel(
++            name='ClienteEspera',
++            fields=[
++                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
++                ('nome', models.CharField(max_length=255)),
++                ('telefone', models.CharField(default='Sem telefone.', max_length=20, unique=True)),
++                ('observacoes', models.TextField(blank=True)),
++                ('IdAdvogado', models.IntegerField(default=0)),
++                ('cpf', models.CharField(blank=True, max_length=14, unique=True)),
++                ('dataNascimento', models.DateField(blank=True, default='2000-01-01')),
++            ],
++        ),
++        migrations.CreateModel(
++            name='Documentos',
++            fields=[
++                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
++                ('nome', models.CharField(max_length=100)),
++                ('tipo', models.CharField(max_length=100)),
++                ('documento', models.TextField()),
++            ],
++        ),
++        migrations.CreateModel(
++            name='Escritorios',
++            fields=[
++                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
++                ('nome', models.CharField(max_length=255)),
++                ('rua', models.CharField(blank=True, max_length=255)),
++                ('numero', models.IntegerField(default=0)),
++                ('estado', models.CharField(blank=True, max_length=255)),
++                ('complemento', models.CharField(blank=True, max_length=255)),
++                ('cep', models.CharField(blank=True, max_length=20)),
++                ('cidade', models.CharField(blank=True, max_length=255)),
++                ('bairro', models.CharField(blank=True, max_length=255)),
++            ],
++        ),
++        migrations.CreateModel(
++            name='FaseProcesso',
++            fields=[
++                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
++                ('nome', models.CharField(max_length=100)),
++            ],
++        ),
++        migrations.CreateModel(
++            name='GrupoAcao',
++            fields=[
++                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
++                ('nome', models.CharField(max_length=100)),
++            ],
++        ),
++        migrations.CreateModel(
++            name='Parceiros',
++            fields=[
++                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
++                ('nome', models.CharField(max_length=255)),
++                ('email', models.EmailField(default='nenhum@provedor.com', max_length=254, unique=True)),
++                ('telefone', models.CharField(default='Sem telefone.', max_length=20, unique=True)),
++                ('cpf', models.CharField(default='Sem CNPJ.', max_length=18, unique=True)),
++                ('rua', models.CharField(blank=True, max_length=255)),
++                ('numero', models.IntegerField(default=0)),
++                ('cidade', models.CharField(blank=True, max_length=255)),
++                ('estado', models.CharField(blank=True, max_length=255)),
++                ('bairro', models.CharField(blank=True, max_length=255)),
++                ('observacoes', models.TextField(blank=True)),
++            ],
++        ),
++        migrations.CreateModel(
++            name='TipoTarefa',
++            fields=[
++                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
++                ('nome', models.CharField(max_length=100)),
++            ],
++        ),
++        migrations.CreateModel(
++            name='Advogado',
++            fields=[
++                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
++                ('password', models.CharField(max_length=128, verbose_name='password')),
++                ('last_login', models.DateTimeField(blank=True, null=True, verbose_name='last login')),
++                ('nome', models.CharField(max_length=255)),
++                ('telefone', models.CharField(max_length=20)),
++                ('email', models.EmailField(default='nenhum@provedor.com', max_length=254, unique=True)),
++                ('oab', models.CharField(blank=True, default='Nenhuma OAB', max_length=20, null=True)),
++                ('foto', models.URLField(blank=True, max_length=500, null=True)),
++                ('is_active', models.BooleanField(default=True)),
++                ('is_staff', models.BooleanField(default=False)),
++                ('is_superuser', models.BooleanField(default=False)),
++                ('is_online', models.BooleanField(default=False)),
++                ('groups', models.ManyToManyField(blank=True, help_text='The groups this user belongs to. A user will get all permissions granted to each of their groups.', related_name='user_set', related_query_name='user', to='auth.group', verbose_name='groups')),
++                ('user_permissions', models.ManyToManyField(blank=True, help_text='Specific permissions for this user.', related_name='user_set', related_query_name='user', to='auth.permission', verbose_name='user permissions')),
++            ],
++            options={
++                'abstract': False,
++            },
++        ),
++        migrations.CreateModel(
++            name='ArquivoModel',
++            fields=[
++                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
++                ('nome', models.CharField(default='Sem nome', max_length=255)),
++                ('arquivo', models.TextField()),
++                ('cliente_id', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='main.cliente')),
++            ],
++        ),
++        migrations.CreateModel(
++            name='EtapaProcesso',
++            fields=[
++                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
++                ('nome', models.CharField(max_length=100)),
++                ('faseProcesso', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='main.faseprocesso')),
++            ],
++        ),
++        migrations.AddField(
++            model_name='cliente',
++            name='parceiro',
++            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='clientes', to='main.parceiros'),
++        ),
++        migrations.CreateModel(
++            name='Processo',
++            fields=[
++                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
++                ('numeroProcesso', models.CharField(blank=True, default='Número não cadastrado.', max_length=50, unique=True)),
++                ('status', models.CharField(choices=[('ativo', 'Ativo'), ('arquivado', 'Arquivado')], default='ativo', max_length=50)),
++                ('dataContrato', models.DateTimeField(blank=True, default='2000-01-01 00:00:00')),
++                ('classificacao', models.CharField(blank=True, choices=[('ruim', 'Ruim'), ('regular', 'Regular'), ('bom', 'Bom'), ('excelente', 'Excelente')], default='regular', max_length=50)),
++                ('observacoes', models.TextField(blank=True)),
++                ('prioritario', models.BooleanField(default=False)),
++                ('concluido', models.BooleanField(default=False)),
++                ('advogadoCriadorId', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to=settings.AUTH_USER_MODEL)),
++                ('clienteId', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='main.cliente')),
++                ('etapa', models.ForeignKey(blank=True, on_delete=django.db.models.deletion.PROTECT, to='main.etapaprocesso')),
++                ('fase', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, to='main.faseprocesso')),
++                ('grupoAcao', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, to='main.grupoacao')),
++            ],
++        ),
++        migrations.CreateModel(
++            name='Representante',
++            fields=[
++                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
++                ('nome', models.CharField(max_length=255)),
++                ('telefone', models.CharField(max_length=20, unique=True)),
++                ('email', models.EmailField(blank=True, max_length=254)),
++                ('profissao', models.CharField(blank=True, max_length=255)),
++                ('cpf', models.CharField(max_length=14, unique=True)),
++                ('cep', models.CharField(max_length=10)),
++                ('rua', models.CharField(max_length=255)),
++                ('numero', models.IntegerField(default=0)),
++                ('cidade', models.CharField(max_length=255)),
++                ('estado', models.CharField(max_length=255)),
++                ('bairro', models.CharField(max_length=255)),
++                ('complemento', models.CharField(blank=True, max_length=255)),
++                ('observacoes', models.TextField(blank=True)),
++                ('cliente', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='representantes', to='main.cliente')),
++            ],
++        ),
++        migrations.CreateModel(
++            name='Tarefas',
++            fields=[
++                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
++                ('dataInicio', models.DateTimeField(auto_now_add=True)),
++                ('prazoFinal', models.DateTimeField(blank=True, null=True)),
++                ('urgente', models.BooleanField(blank=True, default=False)),
++                ('arquivo', models.TextField(blank=True, null=True)),
++                ('concluida', models.BooleanField(blank=True, default=False)),
++                ('deletada', models.BooleanField(default=False)),
++                ('deletadaPor', models.CharField(blank=True, default='Ninguem', max_length=255)),
++                ('status', models.CharField(choices=[('em aberto', 'Em aberto'), ('atrasada', 'Atrasada'), ('perto do prazo', 'Perto do prazo')], default='em aberto', max_length=50)),
++                ('observacoes', models.TextField(blank=True)),
++                ('advogadoCriadorId', models.ForeignKey(blank=True, on_delete=django.db.models.deletion.CASCADE, related_name='advogadoCriador', to=settings.AUTH_USER_MODEL)),
++                ('advogadoResponsavelId', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='advogadoResponsavel', to=settings.AUTH_USER_MODEL)),
++                ('processoOrigemId', models.ForeignKey(default=0, on_delete=django.db.models.deletion.CASCADE, to='main.processo')),
++                ('tipoTarefa', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.PROTECT, to='main.tipotarefa')),
++            ],
++        ),
++        migrations.CreateModel(
++            name='HistoricoTarefas',
++            fields=[
++                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
++                ('dataHora', models.DateTimeField(auto_now_add=True)),
++                ('acao', models.CharField(blank=True, max_length=255)),
++                ('tarefaId', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='main.tarefas')),
++            ],
++        ),
++        migrations.CreateModel(
++            name='ArquivoTarefa',
++            fields=[
++                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
++                ('nome', models.CharField(default='Sem nome', max_length=255)),
++                ('arquivo', models.TextField()),
++                ('tarefa_id', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='main.tarefas')),
++            ],
++        ),
++        migrations.CreateModel(
++            name='TipoAcao',
++            fields=[
++                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
++                ('nome', models.CharField(max_length=100)),
++                ('grupoAcao', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='main.grupoacao')),
++            ],
++        ),
++        migrations.AddField(
++            model_name='processo',
++            name='tipoAcao',
++            field=models.ForeignKey(blank=True, on_delete=django.db.models.deletion.PROTECT, to='main.tipoacao'),
++        ),
++    ]
+diff --git a/restApi/main/migrations/0002_processocliente_and_processo_clientes.py b/restApi/main/migrations/0002_processocliente_and_processo_clientes.py
+new file mode 100644
+index 0000000..714227b
+--- /dev/null
++++ b/restApi/main/migrations/0002_processocliente_and_processo_clientes.py
+@@ -0,0 +1,34 @@
++# Generated by Django 5.1.7 on 2026-11-14
++
++import django.db.models.deletion
++from django.db import migrations, models
++
++
++class Migration(migrations.Migration):
++
++    dependencies = [
++        ('main', '0001_initial'),
++    ]
++
++    operations = [
++        migrations.CreateModel(
++            name='ProcessoCliente',
++            fields=[
++                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
++                ('ordem', models.PositiveIntegerField(default=0)),
++                ('cliente', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='+', to='main.cliente')),
++                ('processo', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='clientes_associacoes', to='main.processo')),
++            ],
++            options={
++                'ordering': ('ordem', 'id'),
++                'constraints': [
++                    models.UniqueConstraint(fields=('processo', 'cliente'), name='unique_cliente_por_processo'),
++                ],
++            },
++        ),
++        migrations.AddField(
++            model_name='processo',
++            name='clientesId',
++            field=models.ManyToManyField(blank=True, related_name='processos_associados', through='main.ProcessoCliente', to='main.cliente'),
++        ),
++    ]
+diff --git a/restApi/main/migrations/__init__.py b/restApi/main/migrations/__init__.py
+new file mode 100644
+index 0000000..8b13789
+--- /dev/null
++++ b/restApi/main/migrations/__init__.py
+@@ -0,0 +1 @@
++
+diff --git a/restApi/main/models.py b/restApi/main/models.py
+index 053ecc6..9414251 100644
+--- a/restApi/main/models.py
++++ b/restApi/main/models.py
+@@ -5,23 +5,23 @@ class Cliente(models.Model):
+     nome = models.CharField(max_length=255)
+     cpf = models.CharField(max_length=20, unique=True)
+     telefone = models.CharField(max_length=20)
+-    dataNascimento = models.DateField(blank=True, null=True)
++    dataNascimento = models.DateField()
+     profissao = models.CharField(max_length=255,blank=True)
+-    inss = models.CharField(max_length=255,blank=True)
++    inss = models.CharField(max_length=255)
+     cep = models.CharField(max_length=20,blank=True)
+     complemento = models.CharField(max_length=255,blank=True)
+     contrato = models.BooleanField(default=True)
+     contactadoPor = models.CharField(max_length=255,blank=True)
+     motivo = models.TextField(blank=True)
+-    rua = models.CharField(max_length=255,blank=True)
++    rua = models.CharField(max_length=255)
+     numero = models.IntegerField(null=True)
+-    cidade = models.CharField(max_length=255,blank=True)
+-    estado = models.CharField(max_length=255,blank=True)
+-    bairro = models.CharField(max_length=255,blank=True)
++    cidade = models.CharField(max_length=255)
++    estado = models.CharField(max_length=255)
++    bairro = models.CharField(max_length=255)
+     observacoes = models.TextField(blank=True)
+     foto = models.URLField(max_length=500, blank=True, null=True)
+     contactado = models.BooleanField(default=False)
+-    parceiro = models.ForeignKey("Parceiros", on_delete=models.SET_NULL, null=True, blank=True, related_name="clientes")
++    parceiro = models.ForeignKey("Parceiros", on_delete=models.SET_NULL, null=True, related_name="clientes")
+     """o Django não consegue criar campos apos a leitura da classe, então o
+     campo motivo deve ser criado e ignorado caso c/ontrato for TRUE,
+     garantido que seja escrito se for False pelo validation error la no serializer.py.
+@@ -44,13 +44,19 @@ class Representante(models.Model):
+     profissao = models.CharField(max_length=255,blank=True)
+     cpf = models.CharField(max_length=20,unique=True)
+     cep = models.CharField(max_length=10)
+-    cliente = models.ForeignKey(Cliente, on_delete=models.CASCADE, null=True, blank=True, related_name='representantes')
++    cliente = models.ForeignKey(
++        Cliente,
++        on_delete=models.CASCADE,
++        null=True,
++        blank=True,
++        related_name='representantes'
++    )
+     rua = models.CharField(max_length=255)
+     numero = models.IntegerField(default=0)
+     cidade = models.CharField(max_length=255)
+     estado = models.CharField(max_length=255)
+     bairro = models.CharField(max_length=255)
+-    complemento = models.CharField(max_length=255,blank=True)
++    complemento = models.CharField(max_length=255, blank=True)
+     observacoes = models.TextField(blank=True)
+ 
+     def __str__(self):
+@@ -86,13 +92,13 @@ class Parceiros(models.Model):
+     
+ class Escritorios(models.Model):
+     nome = models.CharField(max_length=255)
+-    rua = models.CharField(max_length=255,blank=True)
+-    numero = models.IntegerField(default=0)
+-    estado = models.CharField(max_length=255,blank=True)
++    rua = models.CharField(max_length=255)
++    numero = models.IntegerField(default=0, blank=True)
++    estado = models.CharField(max_length=255)
+     complemento = models.CharField(max_length=255,blank=True)
+-    cep = models.CharField(max_length=20,blank=True)
+-    cidade = models.CharField(max_length=255,blank=True)
+-    bairro = models.CharField(max_length=255,blank=True)
++    cep = models.CharField(max_length=20)
++    cidade = models.CharField(max_length=255)
++    bairro = models.CharField(max_length=255)
+     
+     def __str__(self):
+         return f'Escritorio {self.nome}'
+@@ -188,12 +194,12 @@ class Processo(models.Model):
+     )
+     advogadoCriadorId = models.ForeignKey(Advogado, on_delete=models.CASCADE)
+     grupoAcao=  models.ForeignKey('GrupoAcao', on_delete=models.PROTECT)
+-    tipoAcao = models.ForeignKey('TipoAcao', on_delete=models.PROTECT, blank=True)
++    tipoAcao = models.ForeignKey('TipoAcao', on_delete=models.PROTECT)
+     fase = models.ForeignKey('FaseProcesso', on_delete=models.PROTECT)
+     etapa = models.ForeignKey('EtapaProcesso', on_delete=models.PROTECT, blank=True)
+-    dataContrato = models.DateTimeField(default='2000-01-01 00:00:00', blank=True)
++    dataContrato = models.DateTimeField(default='2000-01-01 00:00:00')
+     CLASSIFICACAO_CHOICES = [('ruim','Ruim'),('regular','Regular'),('bom','Bom'),('excelente','Excelente')]
+-    classificacao = models.CharField(max_length=50, blank=True, choices=CLASSIFICACAO_CHOICES, default='regular')
++    classificacao = models.CharField(max_length=50, choices=CLASSIFICACAO_CHOICES, default='regular')
+     observacoes = models.TextField(blank=True)
+     prioritario = models.BooleanField(default=False)
+     concluido = models.BooleanField(default=False)
+@@ -240,12 +246,12 @@ class EtapaProcesso(models.Model):
+         return self.nome
+ 
+ class Tarefas(models.Model):
+-    advogadoCriadorId = models.ForeignKey(Advogado, on_delete=models.CASCADE,related_name='advogadoCriador', blank=True)
++    advogadoCriadorId = models.ForeignKey(Advogado, on_delete=models.CASCADE,related_name='advogadoCriador')
+     advogadoResponsavelId = models.ForeignKey(Advogado, on_delete=models.CASCADE,related_name='advogadoResponsavel')
+     processoOrigemId = models.ForeignKey(Processo, on_delete=models.CASCADE,default=0)    
+-    tipoTarefa = models.ForeignKey('TipoTarefa', on_delete=models.PROTECT, null=True, blank=True)
++    tipoTarefa = models.ForeignKey('TipoTarefa', on_delete=models.PROTECT)
+     dataInicio = models.DateTimeField(auto_now_add=True)
+-    prazoFinal = models.DateTimeField(null=True, blank=True)
++    prazoFinal = models.DateTimeField(null=True)
+     urgente = models.BooleanField(default=False,blank=True) # UM FILTRO
+     arquivo = models.TextField(null=True,blank=True)
+     #deletadas = models.BooleanField(default=False,blank=True)
+diff --git a/restApi/main/novas_views/advogados_views.py b/restApi/main/novas_views/advogados_views.py
+index c01424a..0999f57 100644
+--- a/restApi/main/novas_views/advogados_views.py
++++ b/restApi/main/novas_views/advogados_views.py
+@@ -71,10 +71,10 @@ class AdvogadoUserInfoView(APIView):
+             advogado = request.user
+             serializer = AdvogadoSerializer(advogado)
+             serializer_formatado = dict(serializer.data)
+-            if advogado.is_staff:
+-                serializer_formatado['role'] = 'staff'
+-            elif advogado.is_superuser:
++            if advogado.is_superuser:
+                 serializer_formatado['role'] = 'admin'
++            elif advogado.is_staff:
++                serializer_formatado['role'] = 'staff'
+             else:
+                 serializer_formatado['role'] = 'advogado'
+             return Response(serializer_formatado)
+@@ -91,15 +91,8 @@ class AdvogadoRegisterView(APIView):
+ 
+     def post(self, request):
+         service = AdvogadoService()
++        data = request.data
+ 
+-        # Obter dados do request
+-        try:
+-            data = json.loads(request.body)
+-        except json.JSONDecodeError:
+-            return JsonResponse(
+-                {"error": "JSON inválido."},
+-                status=400
+-            )
+         
+         # Registrar advogado via service
+         try:
+@@ -108,7 +101,7 @@ class AdvogadoRegisterView(APIView):
+                 email=data.get('email'),
+                 telefone=data.get('telefone'),
+                 oab=data.get('oab'),
+-                foto=data.get('foto'),
++                foto=request.FILES.get('foto') or data.get('foto'),
+                 is_staff=data.get('is_staff', False),
+                 password=data.get('password')
+             )
+@@ -206,6 +199,7 @@ class AdvogadoLogoutView(APIView):
+                 pass
+ 
+         response = Response({"detail": "Logout realizado com sucesso."})
++        # Deletar cookies - o método delete_cookie do Django não aceita parâmetros como secure/samesite
+         response.delete_cookie('access_token', path='/')
+         response.delete_cookie('refresh_token', path='/')
+         return response
+@@ -244,19 +238,3 @@ class AdvogadosDashboardView(APIView):
+                 {'error': str(e)},
+                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
+             )
+-
+-
+-class AdvogadoUserInfoView(APIView):
+-    """Retorna informações do usuário autenticado"""
+-    permission_classes = [IsAuthenticated]
+-    
+-    def get(self, request, *args, **kwargs):
+-        serializer = AdvogadoSerializer(request.user)
+-        serializer_formatado = dict(serializer.data)
+-        if request.user.is_staff:
+-            serializer_formatado['role'] = 'staff'
+-        elif request.user.is_superuser:
+-            serializer_formatado['role'] = 'admin'
+-        else:
+-            serializer_formatado['role'] = 'advogado'
+-        return Response(serializer_formatado)
+diff --git a/restApi/main/novas_views/auth_views.py b/restApi/main/novas_views/auth_views.py
+index f742c35..9b5ad58 100644
+--- a/restApi/main/novas_views/auth_views.py
++++ b/restApi/main/novas_views/auth_views.py
+@@ -8,6 +8,7 @@ from rest_framework_simplejwt.serializers import TokenRefreshSerializer
+ from rest_framework.throttling import ScopedRateThrottle
+ import json
+ from django.http import JsonResponse
++from django.middleware.csrf import get_token
+ from django.views.decorators.csrf import ensure_csrf_cookie, csrf_exempt, csrf_protect
+ from django.utils.decorators import method_decorator
+ from ..models import Advogado
+@@ -24,30 +25,38 @@ class CustomTokenObtainPairView(TokenObtainPairView):
+     throttle_scope = 'login'
+     throttle_classes = [ScopedRateThrottle]
+     
+-    
+-    @classmethod
+-    def get_token(cls, advogado):
+-        token = super().get_token(advogado)
++    def post(self, request, *args, **kwargs):
++        # Verifica o campo remember_me antes de processar o login
++        remember_me = request.data.get('remember_me', False)
+         
+-        # Adicione as informações do advogado ao token
+-        token['advogado_id'] = advogado.id
+-        token['advogado_nome'] = advogado.nome
+-        token['advogado_email'] = advogado.email
+-        advogado.is_online = True
+-        advogado.save()
++        # Ajusta dinamicamente a configuração do SimpleJWT
++        from rest_framework_simplejwt.settings import api_settings
++        original_lifetime = api_settings.REFRESH_TOKEN_LIFETIME
++        
++        if remember_me:
++            api_settings.REFRESH_TOKEN_LIFETIME = timedelta(days=7)
++        else:
++            api_settings.REFRESH_TOKEN_LIFETIME = timedelta(hours=8)
+         
+-             
+-        return token
+-    
+-    def post(self, request, *args, **kwargs):
+         # Get the standard response from parent
+         response = super().post(request, *args, **kwargs)
+         
++        # Restaura a configuração original
++        api_settings.REFRESH_TOKEN_LIFETIME = original_lifetime
++        
+         # Extract tokens from response data
+         access_token = response.data.get('access')
+         refresh_token = response.data.get('refresh')
+         
+         if access_token and refresh_token:
++            # Define refresh token lifetime for cookie based on remember_me
++            if remember_me:
++                refresh_lifetime_seconds = 7 * 24 * 60 * 60  # 7 dias em segundos
++            else:
++                refresh_lifetime_seconds = 8 * 60 * 60  # 8 horas em segundos
++            
++            print(f"DEBUG: remember_me={remember_me}, refresh_lifetime_seconds={refresh_lifetime_seconds}")
++            
+             # Create HTTP-only cookies
+             # Access token cookie
+             response.set_cookie(
+@@ -64,7 +73,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
+             response.set_cookie(
+                 'refresh_token',
+                 refresh_token,
+-                max_age=settings.SIMPLE_JWT.get('REFRESH_TOKEN_LIFETIME', timedelta(days=7)).total_seconds(),
++                max_age=refresh_lifetime_seconds,
+                 path='/',
+                 secure=settings.JWT_COOKIE_SECURE,
+                 httponly=True,
+@@ -72,6 +81,8 @@ class CustomTokenObtainPairView(TokenObtainPairView):
+             )
+             del response.data['access']
+             del response.data['refresh']
++            if 'remember_me' in response.data:
++                del response.data['remember_me']
+ 
+         return response
+     
+@@ -206,4 +217,7 @@ class CsrfTokenView(APIView):
+     permission_classes = []
+ 
+     def get(self, request):
+-        return JsonResponse({"detail": "CSRF cookie set"})
++        return JsonResponse({
++            "detail": "CSRF cookie set",
++            "csrfToken": get_token(request),
++        })
+diff --git a/restApi/main/novas_views/tarefas_views.py b/restApi/main/novas_views/tarefas_views.py
+index 9fef140..83f8fcf 100644
+--- a/restApi/main/novas_views/tarefas_views.py
++++ b/restApi/main/novas_views/tarefas_views.py
+@@ -14,8 +14,6 @@ from django.http import JsonResponse
+ import json
+ from .services import TarefasServices
+ from .permissions import *
+-import jwt
+-from django.conf import settings
+ 
+ class TarefasViewSet(viewsets.ModelViewSet):
+     service  = TarefasServices()
+@@ -76,17 +74,13 @@ class TarefasViewSet(viewsets.ModelViewSet):
+     
+     def partial_update(self, request, *args, **kwargs):
+         instance = self.get_object()
+-        token = request.COOKIES.get('access_token')
+-
+-        if not token:
+-            return Response({'error': 'Token não encontrado.'}, status=status.HTTP_400_BAD_REQUEST)
+-
+-        try:
+-            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=['HS256'])
+-            advogado_id = payload.get('user_id')
+-            advogado = Advogado.objects.get(id=advogado_id)
+-        except (jwt.PyJWTError, Advogado.DoesNotExist):
+-            return Response({'error': 'Token inválido.'}, status=status.HTTP_400_BAD_REQUEST)
++        
++        # A autenticação já é feita pelo CookieJWTAuthentication
++        # request.user já está populado com o usuário autenticado
++        if not request.user or not request.user.is_authenticated:
++            return Response({'error': 'Usuário não autenticado.'}, status=status.HTTP_401_UNAUTHORIZED)
++        
++        advogado = request.user
+         dados_antes = self.get_serializer(instance).data.copy()  
+         response = super().partial_update(request, *args, **kwargs)
+         instance.refresh_from_db()  # Atualiza a instância do banco de dados
+diff --git a/restApi/main/serializers.py b/restApi/main/serializers.py
+index f1a06af..002cbc9 100644
+--- a/restApi/main/serializers.py
++++ b/restApi/main/serializers.py
+@@ -109,6 +109,17 @@ class EscritoriosSerializer(serializers.ModelSerializer):
+         return endereco
+ 
+ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
++    @classmethod
++    def get_token(cls, user):
++        token = super().get_token(user)
++        
++        # Adiciona as informações do advogado ao token
++        token['advogado_id'] = user.id
++        token['advogado_nome'] = user.nome
++        token['advogado_email'] = user.email
++        
++        return token
++    
+     def validate(self, attrs):
+         # Adiciona etapas customizadas ao login
+         data = super().validate(attrs)
+@@ -116,6 +127,11 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
+         if user.is_active:
+             user.is_online = True
+             user.save()
++        
++        # Adiciona o campo remember_me à resposta
++        remember_me = attrs.get('remember_me', False)
++        data['remember_me'] = remember_me
++        
+         return data
+     
+ class ClienteEsperaSerializer(serializers.ModelSerializer):
+diff --git a/restApi/main/views.py b/restApi/main/views.py
+index 24e8a3c..1cd8a76 100644
+--- a/restApi/main/views.py
++++ b/restApi/main/views.py
+@@ -12,9 +12,7 @@ from .emailSender import EmailSender
+ from django.shortcuts import get_object_or_404
+ from django.db.models import Case, When, Value, IntegerField, Count, Q
+ import json
+-import jwt
+ from rest_framework_simplejwt.views import TokenObtainPairView
+-from jwt.exceptions import InvalidTokenError
+ from rest_framework.response import Response
+ from rest_framework import status
+ from django.utils import timezone
+@@ -1385,18 +1383,13 @@ class TarefasViewSet(viewsets.ModelViewSet):
+     
+     def partial_update(self, request, *args, **kwargs):
+         instance = self.get_object()
+-        token = request.headers.get('Authorization')
+-
+-        if not token:
+-            return Response({'error': 'Token não encontrado.'}, status=status.HTTP_400_BAD_REQUEST)
+-
+-        try:
+-            token_format = token.split(' ')[1]
+-        except IndexError:
+-            return Response({'error': 'Token inválido.'}, status=status.HTTP_400_BAD_REQUEST)
+-        payload = jwt.decode(token_format, settings.SECRET_KEY, algorithms=['HS256'])
+-        advogado_id = payload.get('user_id')
+-        advogado = Advogado.objects.get(id=advogado_id)
++        
++        # A autenticação já é feita pelo CookieJWTAuthentication
++        # request.user já está populado com o usuário autenticado
++        if not request.user or not request.user.is_authenticated:
++            return Response({'error': 'Usuário não autenticado.'}, status=status.HTTP_401_UNAUTHORIZED)
++        
++        advogado = request.user
+         dados_antes = self.get_serializer(instance).data.copy()  
+         response = super().partial_update(request, *args, **kwargs)
+         instance.refresh_from_db()  # Atualiza a instância do banco de dados
+@@ -1562,9 +1555,6 @@ class ArquivoTarefaViewSet(viewsets.ModelViewSet):
+     serializer_class = ArquivoTarefaSerializer
+     permission_classes = [IsAuthenticated]
+     
+-class CustomTokenObtainPairView(TokenObtainPairView):
+-    serializer_class = CustomTokenObtainPairSerializer
+-    
+ 
+     @classmethod
+     def get_token(cls, advogado):
+@@ -1825,11 +1815,6 @@ def emailRequestSenha(request):
+     else:
+         return JsonResponse({'error': 'Método não permitido.'}, status=405)
+     
+-def get_id_from_token(token):
+-    token_format = token.split(' ')[1]
+-    payload = jwt.decode(token_format, settings.SECRET_KEY, algorithms=['HS256'])
+-    return payload.get('user_id')
+-    
+ def validate_reset_token(token):
+     try:
+         refresh = RefreshToken(token)
+@@ -2741,6 +2726,14 @@ def minha_view(request):
+         return Response({'error': 'Advogado não encontrado.'}, status=status.HTTP_404_NOT_FOUND)
+     except Exception as e:
+         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
++def advUserInfo(request):
++    # A autenticação já é feita pelo CookieJWTAuthentication
++    # request.user já está populado com o usuário autenticado
++    if not request.user or not request.user.is_authenticated:
++        return Response({'error': 'Usuário não autenticado.'}, status=status.HTTP_401_UNAUTHORIZED)
++    
++    serializer = AdvogadoSerializer(request.user)
++    return Response(serializer.data)
+ 
+ 
+ 
+diff --git a/restApi/requirements.txt b/restApi/requirements.txt
+index aa1bff0..8a971cc 100644
+--- a/restApi/requirements.txt
++++ b/restApi/requirements.txt
+@@ -6,6 +6,7 @@ django-cors-headers==4.7.0
+ gunicorn==23.0.0
+ 
+ # Banco de Dados
++dj-database-url==2.3.0
+ psycopg2-binary==2.9.9
+ 
+ # Utilitários
+diff --git a/restApi/restApi/settings.py b/restApi/restApi/settings.py
+index b28fa36..406a127 100644
+--- a/restApi/restApi/settings.py
++++ b/restApi/restApi/settings.py
+@@ -1,5 +1,6 @@
+ import os
+ from pathlib import Path
++import dj_database_url
+ from corsheaders.defaults import default_headers
+ from datetime import timedelta
+ from django.core.exceptions import ImproperlyConfigured
+@@ -14,16 +15,20 @@ DEBUG = os.getenv('DJANGO_DEBUG', 'true').lower() == 'true'
+ if not DEBUG and SECRET_KEY == DEVELOPMENT_SECRET_KEY:
+     raise ImproperlyConfigured('DJANGO_SECRET_KEY must be configured when DEBUG=False.')
+ 
+-# IMPORTANTE PARA DOCKER
+-if os.getenv('DOCKER') == '1':
+-    ALLOWED_HOSTS = os.getenv(
+-        'DJANGO_ALLOWED_HOSTS',
+-        'localhost,127.0.0.1,restapi_django,host.docker.internal',
+-    ).split(',')
++def env_csv(name, default=''):
++    """Lê uma variável CSV, descartando espaços e itens vazios."""
++    return [item.strip() for item in os.getenv(name, default).split(',') if item.strip()]
+ 
+-else:
+-    # Ambiente local (Django rodando localmente)
+-    ALLOWED_HOSTS = ['localhost', '127.0.0.1']
++
++# O Render informa automaticamente o hostname público do serviço. Domínios
++# personalizados devem ser incluídos em DJANGO_ALLOWED_HOSTS.
++ALLOWED_HOSTS = env_csv(
++    'DJANGO_ALLOWED_HOSTS',
++    'localhost,127.0.0.1,restapi_django,host.docker.internal' if DEBUG else '',
++)
++render_hostname = os.getenv('RENDER_EXTERNAL_HOSTNAME')
++if render_hostname and render_hostname not in ALLOWED_HOSTS:
++    ALLOWED_HOSTS.append(render_hostname)
+ 
+ INSTALLED_APPS = [
+     'django.contrib.admin',
+@@ -67,10 +72,10 @@ MEDIA_URL = '/media/'
+ MEDIA_ROOT = BASE_DIR / 'media'
+ 
+ CORS_ALLOW_CREDENTIALS = True
+-CORS_ALLOWED_ORIGINS = os.getenv(
++CORS_ALLOWED_ORIGINS = env_csv(
+     'CORS_ALLOWED_ORIGINS',
+-    'http://localhost:3000,http://127.0.0.1:3000',
+-).split(',')
++    'http://localhost:3000,http://127.0.0.1:3000' if DEBUG else '',
++)
+ 
+ # A aplicação Next e a API devem usar o mesmo hostname em desenvolvimento
+ # (por exemplo, ambas em "localhost", e não alternar com 127.0.0.1).
+@@ -81,21 +86,25 @@ CORS_ALLOWED_ORIGINS = os.getenv(
+ #
+ # Cookies SameSite=None exigem HTTPS nos navegadores.
+ JWT_COOKIE_SECURE = os.getenv('JWT_COOKIE_SECURE', str(not DEBUG)).lower() == 'true'
+-JWT_COOKIE_SAMESITE = os.getenv('JWT_COOKIE_SAMESITE', 'Lax')
+-FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000').rstrip('/')
++JWT_COOKIE_SAMESITE = os.getenv('JWT_COOKIE_SAMESITE', 'Lax' if DEBUG else 'None')
++FRONTEND_URL = os.getenv(
++    'FRONTEND_URL',
++    'http://localhost:3000' if DEBUG else '',
++).rstrip('/')
+ CORS_ALLOW_HEADERS = list(default_headers) + [
+     'advkey',
++    'X-CSRFToken',
+ ]
+ 
+ # Configuração de CSRF
+ CSRF_COOKIE_NAME = "csrftoken"
+ CSRF_COOKIE_SECURE = os.getenv('CSRF_COOKIE_SECURE', str(not DEBUG)).lower() == 'true'
+ CSRF_COOKIE_HTTPONLY = False  # JavaScript precisa ler o token
+-CSRF_COOKIE_SAMESITE = os.getenv('CSRF_COOKIE_SAMESITE', 'Lax')
+-CSRF_TRUSTED_ORIGINS = os.getenv(
++CSRF_COOKIE_SAMESITE = os.getenv('CSRF_COOKIE_SAMESITE', 'Lax' if DEBUG else 'None')
++CSRF_TRUSTED_ORIGINS = env_csv(
+     'CSRF_TRUSTED_ORIGINS',
+-    'http://localhost:3000,http://127.0.0.1:3000',
+-).split(',')
++    'http://localhost:3000,http://127.0.0.1:3000' if DEBUG else '',
++)
+ 
+ SECURE_SSL_REDIRECT = not DEBUG
+ SECURE_HSTS_SECONDS = 31536000 if not DEBUG else 0
+@@ -128,11 +137,17 @@ TEMPLATES = [
+ 
+ WSGI_APPLICATION = 'restApi.wsgi.application'
+ 
+-# ----------------------------------------------
+-# ✅ SQLITE DENTRO DO CONTAINER DOCKER
+-# ----------------------------------------------
+-if os.environ.get("DOCKER") == "1":
+-    # ▶ Docker → PostgreSQL
++# O Render fornece DATABASE_URL. Ela tem prioridade sobre a configuração
++# Docker local e não deve ser versionada.
++if os.getenv('DATABASE_URL'):
++    DATABASES = {
++        'default': dj_database_url.config(
++            conn_max_age=600,
++            conn_health_checks=True,
++        )
++    }
++elif os.environ.get("DOCKER") == "1":
++    # Docker local → PostgreSQL
+     DATABASES = {
+         "default": {
+             "ENGINE": "django.db.backends.postgresql",
+@@ -144,14 +159,13 @@ if os.environ.get("DOCKER") == "1":
+         }
+     }
+ else:
+-    # ▶ Fora do Docker → SQLite
++    # Fora do Docker/Render → SQLite
+     DATABASES = {
+         "default": {
+             "ENGINE": "django.db.backends.sqlite3",
+             "NAME": BASE_DIR / "db.sqlite3",
+         }
+     }
+-# ----------------------------------------------
+ 
+ DATETIME_FORMAT = '%Y-%m-%d %H:%M:%S'
+ DATE_FORMAT = '%Y-%m-%d'
