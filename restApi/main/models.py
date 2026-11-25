@@ -206,6 +206,7 @@ class Processo(models.Model):
     observacoes = models.TextField(blank=True)
     prioritario = models.BooleanField(default=False)
     concluido = models.BooleanField(default=False)
+    procedente = models.BooleanField(default=False)
 
 
 class ProcessoCliente(models.Model):
